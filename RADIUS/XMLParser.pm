@@ -729,198 +729,264 @@ END {
 
 
 
-=head1 NAME
-Radius log file extracter
 
+=head1 NAME
+
+RADIUS::XMLParser - Radius log file XML convertor
+
+
+=head1 SYNOPSIS
+
+=over 5
+
+	use RADIUS::XMLParser;
+	
+	my @logs = qw(radius.log);
+	my @labels = qw(
+	Event-Timestamp
+	User-Name
+	File
+	);
+	
+	my $radius = RADIUS::XMLParser->new(
+		DEBUG=>1, 
+		DAYSFORORPHAN=>1, 
+		AUTOPURGE=>0, 
+		ALLEVENTS=>1, 
+		XMLENCODING=>"us-ascii", 
+		OUTPUTDIR=>'/tmp/radius', 
+		LABELS=>\@labels
+		) or die "Cannot create Parser: $!";
+		
+	my $result = $radius->group(\@logs);
+
+=back
 
 =head1 DESCRIPTION
-This module will extract any supported event included in a given radius log file. All events will then be written (converted) into XML sessions afterwards.
+
+
+This module will extract and sort any supported events included in a given radius log file.
+Events will be grouped by their session ID and converted into XML sessions.
 At this time, supported events are the following:
 
--Start
--Interim-Update
--Stop
+	START
+	INTERIM-UPDATE
+	STOP
 
-Events will be stored on different hash tables with SessionID as a unique key.
-The Start and Interims set of event will be stored on File in order to get easily retrieved afterwards (e.g. once all the files has been fully parsed).
 
-For each Stop event, this module will retrieve the respective Start and Interim events based on Session ID key.
+On first step, any event will be stored on different hash tables (with SessionID a unique key).
+Then, for each STOP event, the respective START and INTERIM will be retrieved
 
-[OPTIONAL] Each found Start / Interim event will be removed from hash, and final hash will be stored.
-[OPTIONAL] Only the newest Start / Interim events will be kept. Oldest ones will be considered as orphan events and will be dropped
+=over
 
+=item [OPTIONAL] Each found START / INTERIM event will be removed from hash, and final hash will be stored on disk.
+
+=item [OPTIONAL] Only the newest START / INTERIM events will be kept. Oldest ones will be considered as orphan events and will be dropped
+
+=back
 
 Final XML will get the following structure:
 
-<sessions>
-   <session sessionId=$sessionId>
-      <start></start>
-      <interims>
-         <interim id1></interim>
-         ...
-      </interims>
-      <stop></stop>
-   </session>
-   ...
-</sessions>
+	<sessions>
+	   <session sessionId=$sessionId>
+	      <start></start>
+	      <interims>
+	         <interim id1></interim>
+	      </interims>
+	      <stop></stop>
+	   </session>
+	</sessions>
 
 
-=head2 FUNCTIONS
+=head1 Constructor
 
+=over
 
-new()
-	
-	USAGE:
-	
-		my $parser = RADIUS::XMLParser->new([%params]);
-	
-	PARAMETERS:
-	
-		DEBUG
-			Enable Debug on this module (default off).
-			Regarding the amount of lines in a given Radius log file, debug is split into several levels (1,5,10,15)
+=item USAGE:
+
+	my $z = RADIUS::XMLParser->new([%params]);
+
+=item PARAMETERS:
+
+See L</Options> for a full list of the options available for this method	
 		
-		LABELS
-			Array reference of any label that will be written on XML. 
+=item RETURN:
+
+A radius parser blessed reference
+
+=back
+
+=head1 Options
+
+=over
+
+=item DEBUG
+
+Boolean (0 by default) enabling Debug mode.
+Regarding the amount of lines in a given Radius log file, debug is split into several levels (1,5,10,15).
 	
-			For instance:
-			my @labels = qw(
-			Acct-Output-Packets
-			NAS-IP-Address
-			Event-Timestamp);
+=item LABELS
+
+Array reference of labels user would like to see converted into XML. 
+
+For instance:
+
+	my @labels = qw(
+	Acct-Output-Packets
+	NAS-IP-Address
+	Event-Timestamp);
+
+	Will result on the following XML
+	<stop>
+		<Acct-Output-Packets></Acct-Output-Packets>
+		<NAS-IP-Address></NAS-IP-Address>
+		<Event-Timestamp></Event-Timestamp>
+	</stop>
+
+If LABELS is not supplied, all the found Key / Values will be written. Else, only these labels will be written.	
+FYI, Gettings few LABELS is significantly faster..
+Think of it when dealing with large files !
+
+=item AUTOPURGE
+
+Boolean (0 by default) that will purge stored hash reference (Start + Interim) before being used for Event lookup.
+Newest events will be kept, oldest will be dropped.
+Threshold is defined by below parameter DAYSFORORPHAN
+
+=item DAYSFORORPHAN
+
+Number of days user would like to keep the orphan Start + Interim events.
+Default is 1 day; any event older than 1 day will be dropped.
+AUTOPURGE must be set to true
+
+=item OUTPUTDIR
+
+Output directory where XML file will be created
+Default is '/tmp'
 	
-			Will result on the following XML
-			<stop>
-				<Acct-Output-Packets></Acct-Output-Packets>
-				<NAS-IP-Address></NAS-IP-Address>
-				<Event-Timestamp></Event-Timestamp>
-			</stop>
-	
-			If LABELS not supplied, all the found Key / Values will be written.
-			If LABELS supplied, only these supplied labels will be written
-			
-			Gettings few LABELS is significantly faster.. Think of it when dealing with large files !
-	
-		AUTOPURGE
-			Boolean (0 by default) that will purge stored hash reference (Start + Interim) before being used for Event lookup.
-			Newest events will be kept, oldest will be dropped.
-			Threshold is defined by below parameter DAYSFORORPHAN
-	
-		DAYSFORORPHAN
-			Number of days we would like to keep the orphan Start + Interim events.
-			Default is 1 day, meanining that at startup, any event older than 1 day will be dropped.
-			In order to be taken into account, above parameter AUTOPURGE must be set to true (i.e. 1)
-	
-		OUTPUTDIR
-			Output directory where XML file will be created
-			Default is '/tmp'
+=item ALLEVENTS
+
+Boolean (0 by default).
+If 1, all events will be written, including Start, Interim and Stop "orphan" records. 
+Orphan hash should be empty after processing.
+If 0, only the events Stop will be written together with the respective Start / Interims for the same session ID. 
+Orphan hash should not be empty after processing.
+
+=item XMLENCODING
+
+Only utf-8 and us-ascii are supported 
 		
-		ALLEVENTS
-			Boolean (0 by default) that will allow user to convert every found events (Start / Stop / Interim).
-			If 1, then all events will be written, including Start, Interim and Stop "orphan" records. Orphan hash should be empty after processing.
-			If 0, then only the events Stop will be written together with the respective Start / Interims for the same session ID. Orphan hash should not be empty after processing.
-	
-		XMLENCODING
-			Default UTF-8, this can be changed to us-ascii
-			Only utf-8 and us-ascii are supported 
-			
-		ORPHANDIR
-			Default directory for orphan hash tables stored structure
-			Default is '/tmp'
-			
-		CONTROLDATA
-			Boolean (0 by default) that will print out any hash table in order to control data structure
-			These data structure will be written on files, under ORPHANDIR directory
-			
-			
-	RETURN:
-	
-		A radius parser handler (hash reference)
+=item ORPHANDIR
 
+Default directory for orphan hash tables stored structure
+Default is '/tmp'
+		
+=item CONTROLDATA
 
-group()
+Boolean (0 by default) 
+Print out hash table in order to control data structure
+These data structure will be written on files, under ORPHANDIR directory
+	
+=back
+
+=head1 Methods
+
+=over 5
+
+=item $z->group(\@logs)
+
+The C<group> will parse all logs in array reference C<@logs>.
+For each log file, events will be retrieved, sorted and grouped by their unique sessionId.
+Then, each file will be converted into a XML format.
+	
+=item USAGE:
+	
+		my $return = $z->group(\@logs);
+	
+=item PARAMETER:
+	
+C<@logs>:
+All the radius log file that will be parsed. 
+Actually it might save some precious time to parse several logs instead of one by one.
+(orphan hash events will be loaded only once).
+	
+=item GIVE:
+
+	$self->convert();
+
+For each provided log, an XML will be generated. 
+	
+=item RETURN:
+
+The number of found errors.
+	
+
+=back
+
+=head1 EXAMPLE
 
 	
-	USAGE:
+	my @logs = qw(../etc/radius.log);
+	my @labels = qw(Event-Timestamp User-Name File);
 	
-		my $return = $parser->group(\@logs);
 	
-	PARAMETER:
-	
-		\@logs:
-		All the radius log file that will be parsed. 
-		Actually it might save some precious time to parse several logs instead of one by one as the hash of orphan events will be loaded only once.
-	
-	CALL:
-	
-		$self->convert();
-		For each parsed log, an XML will be generated. See above parameters of new constructor for XML options.
-	
-	RETURN:
-	
-		The number of found errors
-	
-
-
-
-=head2 EXAMPLE
-
-
-
-my @logs = qw(../etc/radius.log);
-my @labels = qw(Event-Timestamp User-Name File);
-
-
-my $radius = RADIUS::XMLParser->new(
-	DEBUG=>1, 
-	DAYSFORORPHAN=>1, 
-	AUTOPURGE=>0, 
-	ALLEVENTS=>1, 
-	XMLENCODING=>"us-ascii", 
-	OUTPUTDIR=>'/tmp/radius',
-	LABELS=>\@labels);
-	
-my $result = $radius->group(\@logs);
+	my $radius = RADIUS::XMLParser->new(
+		DEBUG=>1, 
+		DAYSFORORPHAN=>1, 
+		AUTOPURGE=>0, 
+		ALLEVENTS=>1, 
+		XMLENCODING=>"us-ascii", 
+		OUTPUTDIR=>'/tmp/radius',
+		LABELS=>\@labels);
+		
+	my $result = $radius->group(\@logs);
 
 
 The generated XML will look like the following:
-
-<session sessionId="d537cca0d43c95dc">
-  <start>
-   <Event-Timestamp>1334560899</Event-Timestamp>
-   <User-Name>41794077013</User-Name>
-   <File>radius.log</File>
-  </start>
-  <interims>
-   <interim id="1">
-    <Event-Timestamp>1334561024</Event-Timestamp>
-    <User-Name>41794077013</User-Name>
-    <File>radius.log</File>
-   </interim>
-   <interim id="2">
-    <Event-Timestamp>1334561087</Event-Timestamp>
-    <User-Name>41794077013</User-Name>
-    <File>radius.log</File>
-   </interim>
-  </interims>
-  <stop>
-   <Event-Timestamp>1334561314</Event-Timestamp>
-   <User-Name>41794077013</User-Name>
-   <File>radius.log</File>
-  </stop>
- </session>
-
+	
+	<session sessionId="d537cca0d43c95dc">
+	  <start>
+	   <Event-Timestamp>1334560899</Event-Timestamp>
+	   <User-Name>41794077013</User-Name>
+	   <File>radius.log</File>
+	  </start>
+	  <interims>
+	   <interim id="1">
+	    <Event-Timestamp>1334561024</Event-Timestamp>
+	    <User-Name>41794077013</User-Name>
+	    <File>radius.log</File>
+	   </interim>
+	   <interim id="2">
+	    <Event-Timestamp>1334561087</Event-Timestamp>
+	    <User-Name>41794077013</User-Name>
+	    <File>radius.log</File>
+	   </interim>
+	  </interims>
+	  <stop>
+	   <Event-Timestamp>1334561314</Event-Timestamp>
+	   <User-Name>41794077013</User-Name>
+	   <File>radius.log</File>
+	  </stop>
+	 </session>
+	
 
 
 =head1 AUTHOR
 
-Antoine Amend <antoine.amend@gmail.com>
+Antoine Amend <amend.antoine@gmail.com>
+
+=head1 MODIFICATION HISTORY
+
+See the Changes file.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2012 Antoine Amend. All rights reserved.
+
+This program is free software; you can redistribute it and/or
+modify it under the same terms as Perl itself.
 
 =cut
-
-
-
-
 
 #Keep Perl Happy
 1;
