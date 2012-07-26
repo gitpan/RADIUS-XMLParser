@@ -6,7 +6,7 @@ use RADIUS::XMLParser;
 my @logs = qw(radius.log);
 my @labels = qw(
 Event-Timestamp
-User-Name
+Framed-Protocol
 File
 );
 

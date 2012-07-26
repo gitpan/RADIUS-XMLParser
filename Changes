@@ -2,5 +2,5 @@ Revision history for Perl extension for RADIUS::XMLParser.
 
 1.00  Mon 30 Apr 09:22:16 EDT 2012
 	- first released version
-
-
+1.10  Thu 26 Jul 11:15:00 EDT 2012
+	- fix issue when PDP value contain space characters

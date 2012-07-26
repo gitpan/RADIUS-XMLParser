@@ -10,7 +10,7 @@ use File::Basename;
 use XML::Writer;
 use IO::File;
 
-our $VERSION = '1.00';
+our $VERSION = '1.10';
 
 my %tags = ();
 my %event;
@@ -699,7 +699,8 @@ sub _analyseRadiusLine($$$) {
 		
 
 	#Between first and last line, we store any TAG/VALUE found
-	} elsif ( my($tag,$val) = ( $line =~ m/^\t([A-Za-z-]+) = ["]?([A-Za-z0-9=\\\.-]*)["]?\n/ ) ) {
+	#2012-07-26 Allow space character in key / value
+	} elsif ( my($tag,$val) = ( $line =~ m/^\t([A-Za-z-]+)\s+=\s+["]?([A-Za-z0-9=\\\.\-\s\_]*)["]?\n/ ) ) {
 
 		if($tag){
 			$tags{$tag}++;
@@ -822,7 +823,7 @@ A radius parser blessed reference
 
 =item DEBUG
 
-Boolean (0 by default) enabling Debug mode.
+Integer (0 by default) enabling Debug mode.
 Regarding the amount of lines in a given Radius log file, debug is split into several levels (1,5,10,15).
 	
 =item LABELS
@@ -874,7 +875,7 @@ Orphan hash should not be empty after processing.
 
 =item XMLENCODING
 
-Only utf-8 and us-ascii are supported 
+Only C<utf-8> and C<us-ascii> are supported 
 		
 =item ORPHANDIR
 
@@ -947,24 +948,24 @@ The generated XML will look like the following:
 	<session sessionId="d537cca0d43c95dc">
 	  <start>
 	   <Event-Timestamp>1334560899</Event-Timestamp>
-	   <User-Name>41794077013</User-Name>
+	   <User-Name>User1</User-Name>
 	   <File>radius.log</File>
 	  </start>
 	  <interims>
 	   <interim id="1">
 	    <Event-Timestamp>1334561024</Event-Timestamp>
-	    <User-Name>41794077013</User-Name>
+	    <User-Name>User1</User-Name>
 	    <File>radius.log</File>
 	   </interim>
 	   <interim id="2">
 	    <Event-Timestamp>1334561087</Event-Timestamp>
-	    <User-Name>41794077013</User-Name>
+	    <User-Name>User1</User-Name>
 	    <File>radius.log</File>
 	   </interim>
 	  </interims>
 	  <stop>
 	   <Event-Timestamp>1334561314</Event-Timestamp>
-	   <User-Name>41794077013</User-Name>
+	   <User-Name>User1</User-Name>
 	   <File>radius.log</File>
 	  </stop>
 	 </session>
