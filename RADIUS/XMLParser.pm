@@ -10,7 +10,7 @@ use File::Basename;
 use XML::Writer;
 use IO::File;
 
-our $VERSION = '1.10';
+our $VERSION = '1.20';
 
 my %tags = ();
 my %event;
@@ -125,7 +125,7 @@ sub group($$) {
 		print "$fname: TOTAL ".$processedLines ." line(s) have been processed\n" if $debug;
 		print "$fname: TOTAL ".$errorLines ." error(s) found\n" if $debug;
 		print "$fname: TOTAL ".scalar(keys %stop)." stop event(s) found\n" if $debug;
-
+		print "$fname: TOTAL ".scalar(keys %start)." start event(s) found\n" if $debug;
 
 		#Control data structure
 		if ($controlDataStructure){
@@ -192,7 +192,12 @@ sub convert($$){
 	#Create output xml file	
 	$log = basename($log);
 	my $xml = $log;
-	$xml =~ s/\.log/\.xml/g;
+	if($log =~ m/\.log/){
+		$xml =~ s/\.log/\.xml/g;
+	} else {
+		$xml = $log .".xml";
+	}
+	
 
 	#Create a new IO::File
 	my $output = IO::File->new(">$outputDir/$xml") or croak "Cannot open file $xml, $!";
@@ -503,7 +508,7 @@ sub _findInStartQueue($){
 	my $eventref = $start{$sessionId};
 	if (scalar (keys %$eventref)){
 		#found Start event
-		print "$fname : Found event for session ID $sessionId\n" if $debug > 9;
+		print "$fname : retrieved Start event for session ID $sessionId\n" if $debug > 9;
 		#Remove start event from orphan hash
 		delete $start{$sessionId};
 	} else {
@@ -526,7 +531,7 @@ sub _findInInterimQueue($){
 	my $eventref = $interim{$sessionId};
 	if (scalar (keys %$eventref)){
 		#found Start event
-		print "$fname : Found event for session ID $sessionId\n" if $debug > 9;
+		print "$fname : retrieved Interim event for session ID $sessionId\n" if $debug > 9;
 		#Remove interim event from orphan hash
 		delete $interim{$sessionId};
 	} else {
@@ -649,23 +654,23 @@ sub _analyseRadiusLine($$$) {
 	
 	my ( $line, $lineNumber, $file ) = @_;
 	
-	#New Radius Date Format (1st line)
-	if ( $line =~ /^[A-Za-z]{3}[,]\s[0-9 ]{2}\s[A-Za-z]{3}\s[0-9]{4}\s[0-9]{2}[:][0-9]{2}[:][0-9]{2}[.][0-9]{3}\n/ ) {
-	
-		#Initialize local hash
+	#Radius Date Format (1st line)
+	#Should contain both MON and DAY (letter) And timestamp HH:MI:SS
+	if ($line =~ /^[A-Za-z]{3}.*[A-Za-z]{3}/ && $line =~ /[0-9]{2}[:][0-9]{2}[:][0-9]{2}/){
+     
+		print "$fname: New event, initialize hash\n" if $debug > 9;   	
 		%event = ();
 
 	#Empty line (end of session - Last line)
-	} if ( $line =~ m/^\n/ ) {
+	} elsif ( $line =~ m/^\n/ || $line =~ m/^[\t\s]+[\n]?$/) {
 
-		# End of section reached, store local results to global hash
 		my $val = $event{"Acct-Status-Type"} || "";
 		my $sessionId = $event{"Acct-Session-Id"} || "";
 		my $file = basename($file);
 
 		if ($val =~ /.*[S,s]tart.*/){
 
-			print "$fname: Add event to start hashtable\n" if $debug > 9;
+			print "$fname: Add event to start hashtable\n" if $debug > 4;
 			foreach my $key (keys %event){
 				#Store local start event to global Start events hash
 				$start{$sessionId}{$key}=$event{$key};
@@ -674,7 +679,7 @@ sub _analyseRadiusLine($$$) {
 
 		} elsif ($val =~ /.*[S,s]top.*/){
 
-			print "$fname: Add event to Stop hashtable\n" if $debug > 9;
+			print "$fname: Add event to Stop hashtable\n" if $debug > 4;
 			foreach my $key (keys %event){
 				#Store local stop event to global Stop events hash
 				$stop{$sessionId}{$key}=$event{$key};
@@ -685,7 +690,7 @@ sub _analyseRadiusLine($$$) {
 
 			$interimUpdate = _largestKeyFromHash($interim{$sessionId});
 			$interimUpdate ++;
-			print "$fname: Add event to Interim hashtable\n" if $debug > 9;
+			print "$fname: Add event to Interim hashtable\n" if $debug > 4;
 			foreach my $key (keys %event){
 				#Store local interim event to global Interims events hash
 				$interim{$sessionId}{$interimUpdate}{$key}=$event{$key};
@@ -693,24 +698,27 @@ sub _analyseRadiusLine($$$) {
 			}
 		} else {
 			#Unmanaged event
-			print "$fname: unmanaged event [$val], line $lineNumber\n" if $debug > 4;
+			print "$fname: unmanaged event, line $lineNumber\n" if $debug;
 			return undef;
 		}
 		
 
 	#Between first and last line, we store any TAG/VALUE found
-	#2012-07-26 Allow space character in key / value
-	} elsif ( my($tag,$val) = ( $line =~ m/^\t([A-Za-z-]+)\s+=\s+["]?([A-Za-z0-9=\\\.\-\s\_]*)["]?\n/ ) ) {
+	#2012-07-28 Allowing space character in value and numbers in key
+	} elsif ( my($tag,$val) = ( $line =~ m/^\t([0-9A-Za-z:-]+)\s+=\s+["]?([A-Za-z0-9=\\\.-\_\s]*)["]?.*\n/ ) ) {
 
 		if($tag){
 			$tags{$tag}++;
 			$event{$tag} = $val;
-			print "$fname: $lineNumber: $tag = ".$event{$tag}."\n" if $debug > 14;
+			print "$fname: $lineNumber: $tag = ".$event{$tag}."\n" if $debug > 9;
 		} else {
-			print "$fname: Unknown line $lineNumber, cannot find tag/value" if $debug > 4;
+			print "$fname: Unknown line $lineNumber, cannot find tag/value" if $debug;
 			return undef;
 		}
 		
+	} else {
+
+		print "$fname: This line does not follow any known pattern: $line" if $debug;
 	}
 
 	#If success
@@ -722,7 +730,7 @@ sub _analyseRadiusLine($$$) {
 
 END {
 	
-	    #Store computed hash tables
+        #Store computed hash tables
         lock_store \%start, $startDbm or croak "Cannot store Start to file $startDbm: $!";
         lock_store \%interim, $interimDbm or croak "Cannot store Interim to file $interimDbm: $!";
 	
@@ -766,7 +774,7 @@ RADIUS::XMLParser - Radius log file XML convertor
 =head1 DESCRIPTION
 
 
-This module will extract and sort any supported events included in a given radius log file.
+This module will extract and sort any supported events included in a given radius log file. Note that your logfile must contain an empty line at its end otherwise its last event will not be captured.
 Events will be grouped by their session ID and converted into XML sessions.
 At this time, supported events are the following:
 
@@ -837,7 +845,8 @@ For instance:
 	NAS-IP-Address
 	Event-Timestamp);
 
-	Will result on the following XML
+Will result on the following XML
+
 	<stop>
 		<Acct-Output-Packets></Acct-Output-Packets>
 		<NAS-IP-Address></NAS-IP-Address>
