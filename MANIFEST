@@ -1,0 +1,9 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+RADIUS/XMLParser.pm
+version.pl
+t/load.t
+META.yml                                 Module YAML meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)

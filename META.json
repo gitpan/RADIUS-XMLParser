@@ -1,5 +1,5 @@
 {
-   "abstract" : "Radius log file XML convertor",
+   "abstract" : "unknown",
    "author" : [
       "unknown"
    ],
@@ -12,7 +12,7 @@
       "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
       "version" : "2"
    },
-   "name" : "RADIUS-XMLParser",
+   "name" : "RADIUS_XMLParser",
    "no_index" : {
       "directory" : [
          "t",
@@ -22,7 +22,7 @@
    "prereqs" : {
       "build" : {
          "requires" : {
-            "Test::More" : "0"
+            "ExtUtils::MakeMaker" : "0"
          }
       },
       "configure" : {
