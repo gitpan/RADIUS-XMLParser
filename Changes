@@ -8,7 +8,10 @@ Revision history for Perl extension RADIUS::XMLParser.
 	- fix issue when PDP key contains odd
 	- enhance Date Time regex to be more permissive
 1.3  Mon 11 Mar 22:42:45 2013
-	- Remove radius.log useless file
+	- Remove pretty large file radius.log 
 	- Fix issues with END blocks
 	- Declare dependencies XML::Writer and Storable
-
+2.0 Tue 19 Mar 10:17:22 2013
+	- Add test parse.t and load.t
+	- parse XML 1by1 and access parsing Metadata
+	- create default directories and check file permission

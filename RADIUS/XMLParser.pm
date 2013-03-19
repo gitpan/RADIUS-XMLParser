@@ -3,49 +3,46 @@ package RADIUS::XMLParser;
 use strict;
 use warnings;
 
+use File::Basename;
+use File::Path qw( make_path );
+use File::HomeDir qw(home);
 use Storable qw(lock_store lock_retrieve);
 use Carp;
-use Data::Dumper;
-use File::Basename;
-use XML::Writer;
 use IO::File;
+use XML::Writer;
 
-our $VERSION = '1.3';
+our $VERSION='2.0';
 
-# Hash tables for radius events
+my $fname = 'RADIUS::XMLParser';
 my %tags = ();
 my %event;
 my %start;
 my %stop;
 my %interim;
-
 my $interimUpdate;
 my @labels;
 my $writer;
 my $daysForOrphan = 1;
 my $labelref;
-
-my $startDbm;
-my $interimDbm;
-my $stopDbm;
-
-my $orphanDir = '/tmp';
+my $orphanDir;
 my $debug = 0;
 my $purgeOrphan = 0;
 my $writeAllEvents = 0;
-my $controlDataStructure = 0;
-my $outputDir = '/tmp';
+my $outputDir;
 my $xmlencoding = "utf-8";
-
+my %metadata = ();
+my $startDbm;
+my $interimDbm;
 
 #--------------------------------------------------
-#Constructor
+# Constructor
+#--------------------------------------------------
 sub new {
 
 	my $this   = shift;
 	my $class  = ref($this) || $this;
 	my %params = @_;
-
+	
 	#Load parameters if any
 	$debug = $params{DEBUG} if $params{DEBUG};
 	$labelref = $params{LABELS} if $params{LABELS};
@@ -53,129 +50,131 @@ sub new {
 	$daysForOrphan = $params{DAYSFORORPHAN} if $params{DAYSFORORPHAN};
 	$writeAllEvents = $params{ALLEVENTS} if $params{ALLEVENTS};
 	$xmlencoding = $params{XMLENCODING} if $params{XMLENCODING};
-	$outputDir = $params{OUTPUTDIR} if $params{OUTPUTDIR};
-	$orphanDir = $params{ORPHANDIR} if $params{ORPHANDIR};
-	$controlDataStructure = $params{CONTROLDATA} if $params{CONTROLDATA};
 	@labels = @$labelref if $labelref;
+		
+
+	# Create default Output directory if not supplied
+	if ($params{OUTPUTDIR}){
+		$outputDir = $params{OUTPUTDIR};
+	} else {
+		$outputDir = home() . "/radius/xml";
+		print "$fname : Output directory not supplied, falling back to $outputDir\n" if $debug;
+	}
 	
-	#Print supplied parameters
-	if ($debug){
-		foreach my $key (keys %params){
-			print "CONF: params{$key} = ".$params{$key}."\n";
-		}	
+	if ( !-d $outputDir ) {
+		print "$fname : $outputDir does not exist, making path\n" if $debug;
+    	make_path $outputDir or croak "Failed to create path: $outputDir";
+	} else {
+		croak "Directory $outputDir is not writable" if (! -w $outputDir);
 	}
 
-	$startDbm = "$orphanDir/radius.orphan.start";
-	$interimDbm = "$orphanDir/radius.orphan.interim";
-	$stopDbm = "$orphanDir/radius.orphan.stop";
+	# Create default Orphan directory if not supplied	
+	if ($params{ORPHANDIR}){
+		$orphanDir = $params{ORPHANDIR};
+	} else {
+		$orphanDir = home() . "/radius/orphans";
+		print "$fname : Orphan directory not supplied, falling back to $outputDir\n" if $debug;
+	}
+	
+	if ( !-d $orphanDir ) {
+		print "$fname : $orphanDir does not exist, making path\n" if $debug;
+	    make_path $orphanDir or croak "Failed to create path: $orphanDir";
+	} else {
+		croak "Directory $orphanDir is not writable" if (! -w $orphanDir);
+	}
+		
 
-	#Load previously stored hash if any
-	_loadHash();
+	#Get orphan files
+	$startDbm = "$orphanDir/orphan.start";
+	$interimDbm = "$orphanDir/orphan.interim";
 
 	my $self   = {};
 	bless $self => $class;
+	
+	#Load orphan start and interim hash (if any)
+	_loadHash();
+	
 	$self;
 }
 
-
-
 #--------------------------------------------------
-#Open log file and parse each line. Group then all event by session ID
-sub group($$) {
+# Open log file and parse each line. 
+# Group then all event based on same session ID
+#--------------------------------------------------
+sub convert($$) {
 
-	my ($self, $logFileRef) = @_;
-	my $totalErrors = 0;
+	my ($self, $log) = @_;
 
-	#Logs files to analyze can be provided as an array ref
-	for my $log (@$logFileRef){
+	#Initialize counters
+	my $processedLines = 0;
+	my $errorLines = 0;
+	
+	#Initialize metadata hash
+	%metadata = ();
 
-		#Initialize counters
-		my $processedLines = 0;
-		my $errorLines = 0;
+	#Open log file to be parsed
+	croak "Log file not supplied" if (not defined $log);
+	open (LOG, $log) or croak "Cannot open file; File=$log; $!";
+	print "$fname : Will now parse file $log\n" if $debug;
 
-		#Open log file to be parsed
-		open (LOG, $log) or croak "Cannot open file; File=$log; $!";
-		print "Will now parse file $log\n" if $debug;
+	#Boolean that becomes true (1) when the first blank lines have been skipped.
+	my $begining_skipped = 0;
 
-		#Boolean that becomes true (1) when the first blank lines have been skipped.
-		my $begining_skipped = 0;
+	#Get each line 
+	while ( <LOG> ) {
 
-		#Get each line 
-		while ( <LOG> ) {
-
-			$processedLines++;
-			# Skip the begining of the log file if it only contains blank lines.
-			if (/^(\s)*$/ && !$begining_skipped) {
-				next;
-			} else {
-				$begining_skipped = 1;
-			}
-
-			# Analyze line
-			unless(_analyseRadiusLine( $_, $processedLines, $log )){
-				$errorLines ++;
-			}
+		$processedLines++;
+		# Skip the begining of the log file if it only contains blank lines.
+		if (/^(\s)*$/ && !$begining_skipped) {
+			next;
+		} else {
+			$begining_skipped = 1;
 		}
 
-		#Print sum up
-		print "TOTAL ".$processedLines ." line(s) have been processed\n" if $debug;
-		print "TOTAL ".$errorLines ." error(s) found\n" if $debug;
-		print "TOTAL ".scalar(keys %stop)." stop event(s) found\n" if $debug;
-		print "TOTAL ".scalar(keys %start)." start event(s) found\n" if $debug;
-
-		#Control data structure
-		if ($controlDataStructure){
-			
-			my $stopControlFile = $stopDbm.".dbm";
-			my $startControlFile = $startDbm.".dbm";
-			my $interimControlFile = $interimDbm.".dbm";
-			
-			open (STOP, ">", $stopControlFile) or croak "Cannot open file; File=$stopControlFile; $!";
-			print "Printing out STOP dataStructure to $stopControlFile\n" if $debug;
-			print STOP Dumper(%stop);
-			close(STOP);
-			open (START, ">", $startControlFile) or croak "Cannot open file; File=$startControlFile; $!";
-			print "Printing out START dataStructure to $startControlFile\n" if $debug;
-			print START Dumper(%start);
-			close(START);
-			open (INTERIM, ">", $interimControlFile) or croak "Cannot open file; File=$interimControlFile; $!";
-			print "Printing out INTERIM dataStructure to $interimControlFile\n" if $debug;
-			print INTERIM Dumper(%interim);
-			close(INTERIM);
-			
+		# Analyze line
+		unless(_analyseRadiusLine( $_, $processedLines, $log )){
+			$errorLines ++;
 		}
-
-		#Store file into XML
-		print "Will now convert $log into xml\n" if $debug;
-		$self->convert($log);
-		
-		#Log has been parsed
-		close (LOG);
-
-		print "All done for file $log\n" if $debug;
-
-		print "Reinitializing Stop hash table\n";
-		%stop = ();
-		$totalErrors += $errorLines;
-
-	#Next log file
 	}
 
-	#Print sum up
-	print "All Done for all files!\n" if $debug;
-	print "Orphan Start is now ".scalar(keys %start)." items long\n" if $debug;
-	print "Orphan Interim is now ".scalar(keys %interim)." items long\n" if $debug;
+	#Store file into XML
+	print "$fname : Will now convert $log into xml\n" if $debug;
+	my $xmlReturnRef = _event2xml($log);
+	my %xmlReturn = %$xmlReturnRef;
 
-	return $totalErrors;
+	$metadata{OUTPUT_FILE}=$xmlReturn{XML_FILE};
+	$metadata{EVENT_STOP}=$xmlReturn{XML_STOP};
+	$metadata{EVENT_START}=$xmlReturn{XML_START};
+	$metadata{EVENT_INTERIM}=$xmlReturn{XML_INTERIM};
+	$metadata{ERRORS}=$errorLines;
+	$metadata{PROCESSED_LINES}=$processedLines;
+
+	#Log has been parsed
+	close (LOG);
+
+	#Reinitializing Stop hash table but keep Start and Interim as orphans
+	%stop = ();
+
+	return $xmlReturn{XML_FILE};
 
 }
 
+#--------------------------------------------------
+# Return Metadata of radius parsing
+# Number of errors, processed, etc.
+#--------------------------------------------------
+sub getMetaData($){
+	
+	my ($self) = shift;
+	return \%metadata;
+}
 
 #--------------------------------------------------
-#Convert Stop event hash reference to XML
-sub convert($$){
+# Convert Stop event hash reference to XML
+#--------------------------------------------------
+sub _event2xml($){
 
-	my ($self, $log) = @_;
+	my ($log) = shift;
 
 	#Initialize counter
 	my $stopevents = 0;
@@ -183,17 +182,17 @@ sub convert($$){
 	my $interimevents = 0;
 
 	#Create output xml file	
-	$log = basename($log);
-	my $xml = $log;
+	my $xml = basename($log);
 	if($log =~ m/\.log$/){
-		$xml =~ s/\.log/\.xml/g;
+		$xml =~ s/\.log$/\.xml/g;
 	} else {
 		$xml = $log .".xml";
 	}
+	$xml = $outputDir . "/" . $xml;
 	
 	#Create a new IO::File
-	my $output = IO::File->new(">$outputDir/$xml") or croak "Cannot open file $outputDir/$xml, $!";
-	print "Will now write XML content into $outputDir/$xml\n" if $debug;
+	my $output = IO::File->new(">$xml") 
+		or croak "Cannot open file $xml, $!";
 	
 	#Load XML:Writer
 	$writer = XML::Writer->new(
@@ -269,8 +268,7 @@ sub convert($$){
 		$writer->endTag("session");
 	}
 	
-	
-	#ALTERNATIVE
+	#OPTIONAL
 	#If User wants all events to be reported, let us process start event
 	if ($writeAllEvents){
 	
@@ -308,6 +306,7 @@ sub convert($$){
 					$writer->endTag("interim");
 				}
 			}
+			
 			#Close INTERIMS tag
 			$writer->endTag("interims");
 			
@@ -326,7 +325,6 @@ sub convert($$){
 			delete $start{$sessionId};
 			
 		}
-		
 		
 		#If User wants all events to be reported, let us process interim event
 		for my $sessionId (keys %interim){
@@ -367,36 +365,35 @@ sub convert($$){
 			#And delete orphan record
 			delete $interim{$sessionId};
 		}
-		
 	}
 	
 	#Close SESSIONS tag
 	$writer->endTag("sessions");
 
-	#Print sum up
-	print "$stopevents Stop event(s) have been written\n" if $debug;
-	print "$startevents Start event(s) have been found and written\n" if $debug;
-	print "$interimevents Interims event(s) have been found and written\n" if $debug;
-
-	return 1;
-
+	my %metadata = ();
+	$metadata{XML_FILE}=$xml;
+	$metadata{XML_STOP}=$stopevents;
+	$metadata{XML_START}=$startevents;
+	$metadata{XML_INTERIM}=$interimevents;
+	return \%metadata;
 }
 
 
 #--------------------------------------------------
-#Remove oldest keys from hash
-sub _removeStartOldEntries($){
+# Remove oldest keys from hash
+#--------------------------------------------------
+sub _purgeStartOrphans($){
 
 	my $hashref = shift;
 	my %hash = %$hashref;
+	print "$fname : Removing start orphans older than $daysForOrphan day\n" if $debug;
+	my $removed = 0;
 
 	#Current Epoch
 	my $time = time;
 
 	#Compute threshold in seconds
 	my $threshold = $daysForOrphan * 24 * 3600;
-
-	print "Remove Start orphan older than $daysForOrphan day(s)\n" if $debug;
 
 	#Run through Start hash table
 	foreach my $sessionId (keys %hash){
@@ -405,97 +402,88 @@ sub _removeStartOldEntries($){
 
 		if (!$newHash{"Event-Timestamp"}){
 			#Delete records without date
-			print "Cannot find timestamp, delete entry\n" if $debug > 9;
 			delete $hash{$sessionId};
+			$removed++;
 			next;
 		}
-
 		#Compute max allowed delta time
 		my $mtime = $newHash{"Event-Timestamp"};
 		my $delta = $time - $mtime;
-
 		if ($delta > $threshold){
 			#Delete oldest records
-			print "delta is $delta - too old orphan\n" if $debug > 14;
 			delete $hash{$sessionId};
+			$removed++;
 			next;
 		}
 	}
-
+	print "$fname : Removed $removed start orphans from orphanage\n" if $debug;
 	#Return reference of purged hash
 	return \%hash;
-
 }
 
 
 #--------------------------------------------------
-#Remove oldest keys from hash
-sub _removeInterimOldEntries($){
+# Remove oldest keys from hash
+#--------------------------------------------------
+sub _purgeInterimOrphans($){
 
-        my $hashref = shift;
-        my %hash = %$hashref;
-
-		#Current Epoch
-        my $time = time;
-
-		#Compute threshold in seconds
-        my $threshold = $daysForOrphan * 24 * 3600;
-
-		print "Remove Interim orphan older than $daysForOrphan day(s)\n" if $debug;
-
-		#Run through Interim hash tables
-        foreach my $sessionId (keys %hash){
-                my $newHashRef = $hash{$sessionId};
-                my %newHash = %$newHashRef;
-				foreach my $occurence (keys %newHash){
-					my $newNewHashRef = $newHash{$occurence};
-                	my %newNewHash = %$newNewHashRef;
-
-                	if (!$newNewHash{"Event-Timestamp"}){
-							#Delete records without date
-                        	print "Cannot find timestamp, delete entry\n" if $debug > 9;
-                        	delete $newHash{$occurence};
-                        	next;
-                	}
-
-					#Compute max allowed delta time
-                	my $mtime = ($newHash{"Event-Timestamp"}) ? $newHash{"Event-Timestamp"} : 0;
-                	my $delta = $time - $mtime;
-
-                	if ($delta > $threshold){
-							#Delete oldest records
-                        	print "delta is $delta - too old orphan\n" if $debug > 14;
-                        	delete $newHash{$occurence};
-                        	next;
-                	}
-		}
-
+	my $hashref = shift;
+	my %hash = %$hashref;
+	print "$fname : Removing interim orphans older than $daysForOrphan day\n" if $debug;
+	my $removed = 0;
+	
+	#Current Epoch
+	my $time = time;
+	
+	#Compute threshold in seconds
+	my $threshold = $daysForOrphan * 24 * 3600;
+	
+	#Run through Interim hash tables
+	foreach my $sessionId (keys %hash){
+		my $newHashRef = $hash{$sessionId};
+		my %newHash = %$newHashRef;
+		foreach my $occurence (keys %newHash){
+			my $newNewHashRef = $newHash{$occurence};
+			my %newNewHash = %$newNewHashRef;
+			if (!$newNewHash{"Event-Timestamp"}){
+				#Delete records without date
+				delete $newHash{$occurence};
+				$removed++;
+				next;
+			}
+			#Compute max allowed delta time
+			my $mtime = ($newHash{"Event-Timestamp"}) ? $newHash{"Event-Timestamp"} : 0;
+			my $delta = $time - $mtime;
+			if ($delta > $threshold){
+				#Delete oldest records
+				delete $newHash{$occurence};
+				$removed++;
+				next;
+			}
+		}	
 		#Remove whole interims events if it does not get any interim session
 		delete $hash{$sessionId} if (!scalar (keys %newHash));
-        }
-
-		#Return reference of purged hash
-        return \%hash;
-
+	}
+	
+	print "$fname : Removed $removed interim orphans from orphanage\n" if $debug;
+	#Return reference of purged hash
+	return \%hash;
 }
 
-
-
-
 #--------------------------------------------------
-#Retrieve an orphan Start event based on sessionId
+# Retrieve an orphan Start event based on sessionId
+#--------------------------------------------------
 sub _findInStartQueue($){
 
 	my ($sessionId) = @_;
 	my $eventref = $start{$sessionId};
 	if (scalar (keys %$eventref)){
 		#found Start event
-		print "retrieved Start event for session ID $sessionId\n" if $debug > 9;
 		#Remove start event from orphan hash
 		delete $start{$sessionId};
 	} else {
 		#not found
-		print "Orphan stop without start for session ID $sessionId\n" if $debug > 14;
+		print "$fname : $sessionId - Orphan stop without start\n" if $debug > 2;
 	}
 
 	#Return hash reference of found Start event, undef otherwise
@@ -505,19 +493,19 @@ sub _findInStartQueue($){
 }
 
 #--------------------------------------------------
-#Retrieve an orphan interim event based on sessionId
+# Retrieve an orphan interim event based on sessionId
+#--------------------------------------------------
 sub _findInInterimQueue($){
 
 	my ($sessionId) = @_;
 	my $eventref = $interim{$sessionId};
 	if (scalar (keys %$eventref)){
 		#found Start event
-		print "retrieved Interim event for session ID $sessionId\n" if $debug > 9;
 		#Remove interim event from orphan hash
 		delete $interim{$sessionId};
 	} else {
 		#not found
-		print "Orphan stop without interim for session ID $sessionId\n" if $debug > 14;
+		print "$fname : $sessionId - Orphan stop without interim\n" if $debug > 2;
 	}
 
 	#Return hash reference of found Start event, undef otherwise
@@ -526,9 +514,9 @@ sub _findInInterimQueue($){
 
 }
 
-
 #--------------------------------------------------
-#Convert a set of key value from a given hash ref into XML
+# Convert a set of key value from a given hash ref into XML
+#--------------------------------------------------
 sub _writeEvent($){
 
 	my $ref = shift;
@@ -558,45 +546,46 @@ sub _writeEvent($){
 
 }
 
-
 #--------------------------------------------------
-#Read stored hash if file exists
+# Read stored hash if file exists
+#--------------------------------------------------
 sub _loadHash() {
 
-        #Load previously stored hashes
-        print "Loading stored data structures\n" if $debug;
-        my $startref;
-        my $interimref;
-
-		#If file with stored hash exist - START
-        if ( -e $startDbm ){
-                $startref = lock_retrieve($startDbm) or croak "cannot open file $startDbm: $!";
-				$startref = _removeStartOldEntries($startref) if $purgeOrphan;
-                %start = %$startref;
-				print "Start hash is now ".scalar(keys %start)." items long\n"; 
-        } else {
-				print "Start orphan hash is currently empty\n" if $debug;
-				#Does not exist, so initialize a new one
-                %start = ();
-        }
-
-		#If file with stored hash exist - INTERIM
-        if ( -e $interimDbm ){
-                $interimref = lock_retrieve($interimDbm) or croak "cannot open file $interimDbm: $!";
-				$interimref = _removeInterimOldEntries($interimref) if $purgeOrphan;
-                %interim = %$interimref;
-				print "Interim hash is now ".scalar(keys %interim)." items long\n"; 
-        } else {
-				print "Interim orphan hash is currently empty\n" if $debug;
-				#Does not exist, so initialize a new one
-                %interim = ();
-        }
+	#Load previously stored hashes
+	print "$fname : Loading Start and Interim orphans from orphanage : $orphanDir\n" if $debug;
+	my $startref;
+	my $interimref;
+	
+	#If file with stored hash exist - START
+	if ( -e $startDbm ){
+		$startref = lock_retrieve($startDbm) or croak "cannot open file $startDbm: $!";
+		$startref = _purgeStartOrphans($startref) if $purgeOrphan;
+		%start = %$startref;
+		print "$fname : Start orphanage is ".scalar(keys %start)." orphans long\n" if $debug; 
+	} else {
+		print "$fname : Start orphanage does not exist. Initializing a new one\n" if $debug;
+		#Does not exist, so initialize a new one
+		%start = ();
+	}
+	
+	#If file with stored hash exist - INTERIM
+	if ( -e $interimDbm ){
+		$interimref = lock_retrieve($interimDbm) or croak "cannot open file $interimDbm: $!";
+		$interimref = _purgeInterimOrphans($interimref) if $purgeOrphan;
+		%interim = %$interimref;
+		print "$fname : Interim orphanage is ".scalar(keys %interim)." orphans long\n" if $debug; 
+	} else {
+		print "$fname : Interim orphanage does not exist. Initializing a new one\n" if $debug;
+		#Does not exist, so initialize a new one
+		%interim = ();
+	}
 
 }
 
 
 #--------------------------------------------------
-#Retrieve the highest numeric key from a given hash
+# Retrieve the highest numeric key from a given hash
+#--------------------------------------------------
 sub _largestKeyFromHash ($) {
 
 	my ($hash) = shift;
@@ -609,77 +598,85 @@ sub _largestKeyFromHash ($) {
 			$key = $keys[$_];
 		}
 	}
-
 	#Return highest key value
 	return $key
 }
 
 
 #--------------------------------------------------
-#Parse each line given as Input buffer
+# Parse each line given as Input buffer
+#--------------------------------------------------
 sub _analyseRadiusLine($$$) {
 	
 	my ( $line, $lineNumber, $file ) = @_;
 	
-	#Radius Date Format (1st line)
-	#Should contain both MON and DAY (letter) And timestamp HH:MI:SS
 	if ($line =~ /^[A-Za-z]{3}.*[A-Za-z]{3}/ && $line =~ /[0-9]{2}[:][0-9]{2}[:][0-9]{2}/){
-		print "New event, initialize hash\n" if $debug > 9;   	
+		#Radius Date Format (1st line)
+		#Should contain both MON and DAY (letter) And timestamp HH:MI:SS
+		#Start of an event, initialize hash table
+		
 		%event = ();
 
-	#Empty line (end of session - Last line)
 	} elsif ( $line =~ m/^\n/ || $line =~ m/^[\t\s]+[\n]?$/) {
-
+		#Empty line (end of session - Last line)
+		
 		my $val = $event{"Acct-Status-Type"} || "";
 		my $sessionId = $event{"Acct-Session-Id"} || "";
 		my $file = basename($file);
 
 		if ($val =~ /.*[S,s]tart.*/){
-			print "Add event to start hashtable\n" if $debug > 4;
+			#START event
 			foreach my $key (keys %event){
 				#Store local start event to global Start events hash
 				$start{$sessionId}{$key}=$event{$key};
 			}
+			
 			$start{$sessionId}{File}=$file;
 
 		} elsif ($val =~ /.*[S,s]top.*/){
-			print "Add event to Stop hashtable\n" if $debug > 4;
+			#STOP event
 			foreach my $key (keys %event){
 				#Store local stop event to global Stop events hash
 				$stop{$sessionId}{$key}=$event{$key};
 			}
+			
 			$stop{$sessionId}{File}=$file;
 
 		} elsif ($val =~ /.*[I,i]nterim/){
+			#INTERIM event			
 			$interimUpdate = _largestKeyFromHash($interim{$sessionId});
 			$interimUpdate ++;
-			print "Add event to Interim hashtable\n" if $debug > 4;
 			foreach my $key (keys %event){
 				#Store local interim event to global Interims events hash
 				$interim{$sessionId}{$interimUpdate}{$key}=$event{$key};
-				$interim{$sessionId}{$interimUpdate}{File}=$file;
 			}
+			
+			$interim{$sessionId}{$interimUpdate}{File}=$file;
+			
 		} else {
-			#Unmanaged event
-			print "unmanaged event [$val], line $lineNumber\n" if $debug > 4;
-			return undef;
+			#If EVENT is populated, this is an unexpected empty line
+			#Else, this is a unmanaged EVENT
+			if (not defined $val){
+				print "$fname : Unmanaged event at line# $lineNumber [$line]\n" if $debug > 1;
+				return undef;
+			}
+
 		}
 		
-	#Between first and last line, we store any TAG/VALUE found
 	} elsif ( my($tag,$val) = ( $line =~ m/^\t([0-9A-Za-z:-]+)\s+=\s+["]?([A-Za-z0-9=\\\.-\_\s]*)["]?.*\n/ ) ) {
-
+		#Between first and last line, we store any TAG/VALUE found
+		
 		if($tag){
 			$tags{$tag}++;
 			$event{$tag} = $val;
-			print "$lineNumber: $tag = ".$event{$tag}."\n" if $debug > 9;
 		} else {
-			print "Unknown line $lineNumber, cannot find tag/value" if $debug;
+			print "$fname : Cannot find tag/value at line# $lineNumber [$line]" if $debug > 1;
 			return undef;
 		}
 		
 	} else {
-
-		print "This line does not follow any known pattern: $line" if $debug;
+		print "$fname : This line# $lineNumber does not follow any known pattern [$line]" if $debug > 1;
+		return undef;
 	}
 
 	#If success
@@ -688,18 +685,24 @@ sub _analyseRadiusLine($$$) {
 }
 
 
+
+
 END {
 	
 	#Store computed Interim hash tables if not empty
 	if(scalar(keys %interim)){
-		lock_store \%interim, $interimDbm or croak "Cannot store Interim to file $interimDbm: $!";
+			lock_store \%interim, $interimDbm or croak "Cannot store Interim to file $interimDbm: $!";
 	}
 	
 	#Store computed Start hash tables if not empty
 	if(scalar(keys %start)){
-		lock_store \%start, $startDbm or croak "Cannot store Start to file $startDbm: $!";	
+			lock_store \%start, $startDbm or croak "Cannot store Start to file $startDbm: $!";	
 	}
 }
+
+
+#Keep Perl Happy
+1;
 
 
 
@@ -713,8 +716,9 @@ RADIUS::XMLParser - Radius log file XML convertor
 =over 5
 
 	use RADIUS::XMLParser;
+	use Data::Dumper;
 	
-	my @logs = qw(radius.log);
+	my $radius_file = 'radius.log';
 	my @labels = qw(
 	Event-Timestamp
 	User-Name
@@ -729,30 +733,43 @@ RADIUS::XMLParser - Radius log file XML convertor
 		XMLENCODING=>"us-ascii", 
 		OUTPUTDIR=>'/tmp/radius', 
 		LABELS=>\@labels
-		) or die "Cannot create Parser: $!";
+	);
 		
-	my $result = $radius->group(\@logs);
+	my $xml_file = $radius->convert($radius_file);
+	print Dumper($parser->getMetaData());
 
 =back
 
 =head1 DESCRIPTION
 
+=over
 
-This module will extract and sort any supported events included in a given radius log file. Note that your logfile must contain an empty line at its end otherwise its last event will not be captured.
-Events will be grouped by their session ID and converted into XML sessions.
-At this time, supported events are the following:
+=item This module will extract and sort any supported events included into a given radius log file. 
 
-	START
-	INTERIM-UPDATE
-	STOP
+=item Note that your logfile must contain an empty line at its end otherwise its last event will not be analyzed.
 
+=item Events will be grouped by their session ID and converted into XML sessions.
 
-On first step, any event will be stored on different hash tables (with SessionID a unique key).
+=item At this time, supported events are the following:
+
+=over
+
+=item START
+
+=item INTERIM-UPDATE
+
+=item STOP
+
+=back
+
+=back
+
+On first step, any event will be stored on different hash tables (with SessionID as a unique key).
 Then, for each STOP event, the respective START and INTERIM will be retrieved
 
 =over
 
-=item [OPTIONAL] Each found START / INTERIM event will be removed from hash, and final hash will be stored on disk.
+=item [OPTIONAL] Each found START / INTERIM event will be written, final hash will be empty.
 
 =item [OPTIONAL] Only the newest START / INTERIM events will be kept. Oldest ones will be considered as orphan events and will be dropped
 
@@ -760,6 +777,8 @@ Then, for each STOP event, the respective START and INTERIM will be retrieved
 
 Final XML will get the following structure:
 
+
+	<?xml version="1.0" encoding="UTF-8"?>
 	<sessions>
 	   <session sessionId=$sessionId>
 	      <start></start>
@@ -771,38 +790,36 @@ Final XML will get the following structure:
 	</sessions>
 
 
-=head1 Constructor
+=head1 CONSTRUCTOR
 
-=over
+=head2 Usage:
 
-=item USAGE:
+	my $parser = RADIUS::XMLParser->new([%params]);
 
-	my $z = RADIUS::XMLParser->new([%params]);
-
-=item PARAMETERS:
-
-See L</Options> for a full list of the options available for this method	
-		
-=item RETURN:
+=head2 Return:
 
 A radius parser blessed reference
 
-=back
+=head2 Options:
 
-=head1 Options
+=head3 DEBUG
 
 =over
 
-=item DEBUG
+=item Integer (0 by default) enabling Debug mode.
 
-Integer (0 by default) enabling Debug mode.
-Regarding the amount of lines in a given Radius log file, debug is split into several levels (1,5,10,15).
+=item Regarding the amount of lines in a given Radius log file, debug is split into several levels (0,1,2,3).
+
+=back
 	
-=item LABELS
+=head3 LABELS
 
-Array reference of labels user would like to see converted into XML. 
+=over
+
+=item Array reference of labels user would like to see converted into XML. 
 
 For instance:
+
 
 	my @labels = qw(
 	Acct-Output-Packets
@@ -811,99 +828,177 @@ For instance:
 
 Will result on the following XML
 
+
 	<stop>
 		<Acct-Output-Packets></Acct-Output-Packets>
 		<NAS-IP-Address></NAS-IP-Address>
 		<Event-Timestamp></Event-Timestamp>
 	</stop>
 
-If LABELS is not supplied, all the found Key / Values will be written. Else, only these labels will be written.	
-FYI, Gettings few LABELS is significantly faster..
-Think of it when dealing with large files !
+=item If LABELS is not supplied, all the found Key / Values will be written. 
 
-=item AUTOPURGE
+=item Else, only these labels will be written.	
 
-Boolean (0 by default) that will purge stored hash reference (Start + Interim) before being used for Event lookup.
-Newest events will be kept, oldest will be dropped.
-Threshold is defined by below parameter DAYSFORORPHAN
+=item  FYI, Gettings few LABELS is significantly faster... Think of it when dealing with large files !
 
-=item DAYSFORORPHAN
+=back
 
-Number of days user would like to keep the orphan Start + Interim events.
-Default is 1 day; any event older than 1 day will be dropped.
-AUTOPURGE must be set to true
+=head3 AUTOPURGE
 
-=item OUTPUTDIR
+=over
 
-Output directory where XML file will be created
-Default is '/tmp'
+=item Boolean (0 by default) that will purge stored hash reference (Start + Interim) before being used for Event lookup.
+
+=item Newest events will be kept, oldest will be dropped.
+
+=item Threshold is defined by below parameter DAYSFORORPHAN
+
+=back
+
+=head3 DAYSFORORPHAN
+
+=over
+
+=item Number of days user would like to keep the orphan Start + Interim events.
+
+=item Default is 1 day; any event older than 1 day will be dropped.
+
+=item AUTOPURGE must be set to true
+
+=back
+
+=head3 OUTPUTDIR
+
+=over
+
+=item Output directory where XML file will be created
+
+=item Default is '${Home Directory}/radius/xml'
+
+=back
 	
-=item ALLEVENTS
+=head3 ALLEVENTS
 
-Boolean (0 by default).
-If 1, all events will be written, including Start, Interim and Stop "orphan" records. 
+=over
+
+=item Boolean (0 by default).
+
+=item If 1, all events will be written, including Start, Interim and Stop "orphan" records. 
 Orphan hash should be empty after processing.
-If 0, only the events Stop will be written together with the respective Start / Interims for the same session ID. 
+
+=item If 0, only the events Stop will be written together with the respective Start / Interims for the same session ID. 
 Orphan hash should not be empty after processing.
 
-=item XMLENCODING
-
-Only C<utf-8> and C<us-ascii> are supported 
-		
-=item ORPHANDIR
-
-Default directory for orphan hash tables stored structure
-Default is '/tmp'
-		
-=item CONTROLDATA
-
-Boolean (0 by default) 
-Print out hash table in order to control data structure
-These data structure will be written on files, under ORPHANDIR directory
-	
 =back
 
-=head1 Methods
+=head3 XMLENCODING
 
-=over 5
+=over
 
-=item $z->group(\@logs)
+=item Only C<utf-8> and C<us-ascii> are supported 
 
-The C<group> will parse all logs in array reference C<@logs>.
-For each log file, events will be retrieved, sorted and grouped by their unique sessionId.
-Then, each file will be converted into a XML format.
-	
-=item USAGE:
-	
-		my $return = $z->group(\@logs);
-	
-=item PARAMETER:
-	
-C<@logs>:
-All the radius log file that will be parsed. 
-Actually it might save some precious time to parse several logs instead of one by one.
-(orphan hash events will be loaded only once).
-	
-=item GIVE:
+=item default is C<utf-8>
+		
+=back
 
-	$self->convert();
+=head3 ORPHANDIR
 
-For each provided log, an XML will be generated. 
-	
-=item RETURN:
+=over
 
-The number of found errors.
-	
+=item Default directory for orphan hash tables stored structure
+
+=item Default is '${Home Directory}/radius/orphans'
+		
+=back
+
+=head1 METHODS
+
+=head2 convert
+
+=head3 Description:
+
+=over
+
+=item The C<convert> will parse and convert provided file C<$log_file>.
+
+=item All its events will be retrieved, sorted and grouped by their unique sessionId.
+
+=item Then, file will be converted into a XML format.
 
 =back
 
-=head1 EXAMPLE
-
+=head3 Usage:
 	
-	my @logs = qw(../etc/radius.log);
+	my $xml_file = $parser->convert($log_file);
+	print "$xml_file is the XML conversion of radius $log_file";
+	
+=head3 Parameter:
+	
+=over
+
+=item C<$log_file>:
+
+=item Radius log file that will be parsed. 
+	
+=back
+
+=head3 Return:
+
+=over
+
+=item The XML C<$xml_file> that has been created.
+
+=back
+
+=head2 getMetaData
+
+=head3 Description:
+
+=over
+
+=item The C<getMetaData> will give you back some useful information about the latest XML conversion
+
+=item This hash will provide you with the number of found events, processed lines, etc... 
+
+=back
+
+=head3 Usage:
+
+=over
+
+Using below code:
+
+
+	use Data::Dumper;
+	print Dumper($parser->getMetaData());
+
+
+Will result on the following output
+
+
+	$VAR1 = {
+          'ERRORS' => 0,
+          'EVENT_INTERIM' => 130,
+          'EVENT_START' => 46,
+          'EVENT_STOP' => 46,
+          'OUTPUT_FILE' => '/tmp/radius.xml',
+          'PROCESSED_LINES' => 5659
+        };
+
+=back 
+
+=head3 Return:
+
+=over
+
+=item A hash reference including metadata
+
+=back
+
+=head1 EXAMPLE:
+
+
 	my @labels = qw(Event-Timestamp User-Name File);
-	
-	
 	my $radius = RADIUS::XMLParser->new(
 		DEBUG=>1, 
 		DAYSFORORPHAN=>1, 
@@ -913,11 +1008,10 @@ The number of found errors.
 		OUTPUTDIR=>'/tmp/radius',
 		LABELS=>\@labels);
 		
-	my $result = $radius->group(\@logs);
-
-
-The generated XML will look like the following:
+	my $xml = $radius->group('../etc/radius.log');
 	
+	__END__
+
 	<session sessionId="d537cca0d43c95dc">
 	  <start>
 	   <Event-Timestamp>1334560899</Event-Timestamp>
@@ -942,7 +1036,6 @@ The generated XML will look like the following:
 	   <File>radius.log</File>
 	  </stop>
 	 </session>
-	
 
 
 =head1 AUTHOR
@@ -955,15 +1048,10 @@ See the Changes file.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (c) 2012 Antoine Amend. All rights reserved.
+Copyright (c) 2013 Antoine Amend. All rights reserved.
 
 This program is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
 
 =cut
-
-#Keep Perl Happy
-1;
-
-
 
