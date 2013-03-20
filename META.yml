@@ -19,7 +19,8 @@ no_index:
     - t
     - inc
 requires:
-  File::HomeDir: 0
+  File::Spec: 0
+  IO::File: 0
   Storable: 0
   XML::Writer: 0
-version: 2.0
+version: 2.1

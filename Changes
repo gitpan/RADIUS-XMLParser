@@ -15,3 +15,6 @@ Revision history for Perl extension RADIUS::XMLParser.
 	- Add test parse.t and load.t
 	- parse XML 1by1 and access parsing Metadata
 	- create default directories and check file permission
+2.1 Tue 19 Mar 18:12:55 2013
+	- XML output stream was not properly closed
+	- Add flush method for daemons processes 
