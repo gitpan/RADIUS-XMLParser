@@ -10,7 +10,7 @@ use Carp;
 use IO::File;
 use XML::Writer;
 
-our $VERSION = '2.1';
+our $VERSION = '2.2';
 
 my $interimUpdate;
 my $writer;
@@ -19,11 +19,11 @@ my $startDbm;
 my $interimDbm;
 my $fname          = 'RADIUS::XMLParser';
 my $daysForOrphan  = 1;
-my $orphanDir      = "";
 my $verbose        = 0;
 my $purgeOrphan    = 0;
 my $writeAllEvents = 0;
-my $outputDir      = "";
+my $outputDir;
+my $orphanDir;
 my $xmlencoding    = "utf-8";
 
 my @labels;

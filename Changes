@@ -18,3 +18,5 @@ Revision history for Perl extension RADIUS::XMLParser.
 2.1 Tue 19 Mar 18:12:55 2013
 	- XML output stream was not properly closed
 	- Add flush method for daemons processes 
+2.2 Wed 20 Mar 12:42:32 2013
+	- Fix issue with undefined output / orphan directories
