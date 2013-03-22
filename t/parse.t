@@ -6,24 +6,21 @@ use Test::Files;
 my $test_file        = 'resources/radius.log';
 my $test_output_dir  = 'tmp';
 my $test_output_file = 'radius.xml';
-my @labels;
+my %labels;
 my %expect;
 my %actual;
 my $parser;
 my $xml;
 
 # Declare labels to write in test XML
-@labels = qw(
-  File
-);
+%labels = ( "File" => "File" );
 
 # What to expect in test
 %expect = (
-	'ERRORS'          => 0,
-	'EVENT_INTERIM'   => 130,
-	'EVENT_START'     => 46,
-	'EVENT_STOP'      => 46,
-	'PROCESSED_LINES' => 5659
+	'INTERIM' => 130,
+	'START'   => 46,
+	'STOP'    => 46,
+	'LINES'   => 5659
 );
 
 # Initialize parser
@@ -32,29 +29,28 @@ $parser = RADIUS::XMLParser->new(
 		ORPHANDIR => $test_output_dir,
 		ALLEVENTS => 1,
 		OUTPUTDIR => $test_output_dir,
-		LABELS    => \@labels
+		MAP       => \%labels
 	}
 );
 
-# Parse test file
-$parser->convert($test_file);
+# Parse Radius
+my ( $xml, $stop, $start, $interim, $processed ) = $parser->convert($test_file);
 
 # Test that XML has been created
-dir_only_contains_ok( $test_output_dir, [qw(tmp radius.xml)],
+dir_contains_ok( $test_output_dir, ['radius.xml'],
 	"Assert that radius.xml has been created" );
 if ( -e "$test_output_dir/radius.xml" ) {
 	unlink "$test_output_dir/radius.xml";
 }
 
-# Retrieve metadata
-my $metadata = $parser->metadata();
-%actual = %$metadata;
-
-# Test expected Vs. Actual values
-for my $key ( keys %expect ) {
-	ok( $actual{$key} == $expect{$key},
-		"Assert that returned $key is equal to $expect{$key}" );
-}
+ok( $stop == $expect{STOP},       
+	"Assert that stop event found are correct" );
+ok( $start == $expect{START},     
+	"Assert that stop event found are correct" );
+ok( $interim == $expect{INTERIM}, 
+	"Assert that stop event found are correct" );
+ok( $processed == $expect{LINES},
+	"Assert that processed lines are correct" );
 
 # End test (declare test run)
 done_testing( scalar( keys %expect ) + 1 );

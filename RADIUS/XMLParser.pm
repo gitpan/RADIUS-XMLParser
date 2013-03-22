@@ -10,11 +10,12 @@ use Carp;
 use IO::File;
 use XML::Writer;
 
-our $VERSION = '2.2';
+our $VERSION = '2.3';
 
 my $interimUpdate;
 my $writer;
 my $labelref;
+my $mapRef;
 my $startDbm;
 my $interimDbm;
 my $fname          = 'RADIUS::XMLParser';
@@ -24,11 +25,10 @@ my $purgeOrphan    = 0;
 my $writeAllEvents = 0;
 my $outputDir;
 my $orphanDir;
-my $xmlencoding    = "utf-8";
+my $xmlencoding = "utf-8";
 
+my %map;
 my @labels;
-
-my %metadata = ();
 my %tags     = ();
 my %event;
 my %start;
@@ -47,14 +47,14 @@ sub new {
 
 	#Load parameters if any
 	$verbose        = $params{VERBOSE}       if $params{VERBOSE};
-	$labelref       = $params{LABELS}        if $params{LABELS};
+	$mapRef         = $params{MAP}           if $params{MAP};
 	$purgeOrphan    = $params{AUTOPURGE}     if $params{AUTOPURGE};
 	$daysForOrphan  = $params{DAYSFORORPHAN} if $params{DAYSFORORPHAN};
 	$writeAllEvents = $params{ALLEVENTS}     if $params{ALLEVENTS};
 	$xmlencoding    = $params{XMLENCODING}   if $params{XMLENCODING};
 	$outputDir      = $params{OUTPUTDIR}     if $params{OUTPUTDIR};
 	$orphanDir      = $params{ORPHANDIR}     if $params{ORPHANDIR};
-	@labels         = @$labelref             if $labelref;
+	%map            = %$mapRef               if $mapRef;
 
 	#Get current directory
 	my $curdir = File::Spec->tmpdir();
@@ -96,10 +96,6 @@ sub convert($$) {
 
 	#Initialize counters
 	my $processedLines = 0;
-	my $errorLines     = 0;
-
-	#Initialize metadata hash
-	%metadata = ();
 
 	#Open log file to be parsed
 	croak "Log file not supplied" if ( not defined $log );
@@ -127,20 +123,12 @@ sub convert($$) {
 		}
 
 		# Analyze line
-		unless ( _analyseRadiusLine( $_, $processedLines, $log ) ) {
-			$errorLines++;
-		}
+		_analyseRadiusLine( $_, $processedLines, $log );
 	}
 
 	#Store file into XML
 	my $xmlReturnRef = _event2xml($log);
 	my %xmlReturn    = %$xmlReturnRef;
-
-	$metadata{EVENT_STOP}      = $xmlReturn{XML_STOP};
-	$metadata{EVENT_START}     = $xmlReturn{XML_START};
-	$metadata{EVENT_INTERIM}   = $xmlReturn{XML_INTERIM};
-	$metadata{ERRORS}          = $errorLines;
-	$metadata{PROCESSED_LINES} = $processedLines;
 
 	#Log has been parsed
 	close(LOG);
@@ -148,18 +136,8 @@ sub convert($$) {
 	#Reinitializing Stop hash table but keep Start and Interim as orphans
 	%stop = ();
 
-	return $xmlReturn{XML_FILE};
+	return ($xmlReturn{XML_FILE}, $xmlReturn{XML_STOP}, $xmlReturn{XML_START}, $xmlReturn{XML_INTERIM}, $processedLines);
 
-}
-
-#--------------------------------------------------
-# Return Metadata of radius parsing
-# Number of errors, processed, etc.
-#--------------------------------------------------
-sub metadata($) {
-
-	my ($self) = shift;
-	return \%metadata;
 }
 
 #--------------------------------------------------
@@ -479,6 +457,7 @@ sub _purgeInterimOrphans($) {
 	print
 "$fname : Removed $removed interim orphans from orphanage (older than $daysForOrphan day)\n"
 	  if $verbose;
+
 	#Return reference of purged hash
 	return \%hash;
 }
@@ -544,27 +523,33 @@ sub _writeEvent($) {
 	my %hash = %$ref;
 
 	#Check if labels have been supplied
-	if ( !@labels ) {
+	if ( !scalar( keys %map ) ) {
 
 		#If not then add any label (tag) found earlier (during parsing)
 		for my $key ( keys %tags ) {
-			push( @labels, $key );
+			$map{$key} = $key;
 		}
-		push( @labels, "File" );
 	}
 
 	#convert only the supplied label
-	for my $key (@labels) {
+	for my $key ( keys %map ) {
 
 		#Get this value
 		my $value = $hash{$key};
+		my $tag;
+		if ( $map{$key} ) {
+			$tag = $map{$key};
+		}
+		else {
+			$tag = $key;
+		}
 
 		#Open a new TAG
-		$writer->startTag($key);
+		$writer->startTag($tag);
 		$writer->characters($value) if $value;
 
 		#Close TAG
-		$writer->endTag($key);
+		$writer->endTag($tag);
 
 	}
 
@@ -709,15 +694,9 @@ sub _analyseRadiusLine($$$) {
 
 		}
 		else {
-
-			#If EVENT is populated, this is an unexpected empty line
-			#Else, this is a unmanaged EVENT
-			if ( not defined $val ) {
-				print "$fname : Unmanaged event at line# $lineNumber [$line]\n"
-				  if $verbose > 1;
-				return undef;
-			}
-
+			#If EVENT is populated, this is a unmanaged EVENT or an unexpected empty line
+			#Ignore it
+			return;
 		}
 
 	}
@@ -735,22 +714,8 @@ sub _analyseRadiusLine($$$) {
 			$tags{$tag}++;
 			$event{$tag} = $val;
 		}
-		else {
-			print "$fname : Cannot find tag/value at line# $lineNumber [$line]"
-			  if $verbose > 1;
-			return undef;
-		}
 
 	}
-	else {
-		print
-"$fname : This line# $lineNumber does not follow any known pattern [$line]"
-		  if $verbose > 1;
-		return undef;
-	}
-
-	#If success
-	return 1;
 
 }
 
@@ -782,13 +747,12 @@ RADIUS::XMLParser - Radius log file XML convertor
 =over 5
 
 	use RADIUS::XMLParser;
-	use Data::Dumper;
+
 	
-	my $radius_file = 'radius.log';
-	my @labels = qw(
-		Event-Timestamp
-		User-Name
-		File
+	my %labels = (
+		'Event-Timestamp'	=> 'Time',	# name of tag "Event-Timestamp"
+		'User-Name'			=> 'User',	# name of tag "User-Name"
+		'File'				=> ''		# default name (i.e. File) for tag File
 	);
 	
 	my $radius = RADIUS::XMLParser->new(
@@ -797,14 +761,12 @@ RADIUS::XMLParser - Radius log file XML convertor
 			DAYSFORORPHAN => 1,
 			AUTOPURGE     => 0,
 			ALLEVENTS     => 1,
-			XMLENCODING   => "us-ascii",
 			OUTPUTDIR     => '/tmp/',
-			LABELS        => \@labels
+			MAP           => \%labels
 		}
 	);
-		
-	my $xml_file = $radius->convert($radius_file);
-	print Dumper($parser->metadata());
+	
+	my ($xml, $stop, $start, $interim, $processed) = $radius->convert('radius.log');
 
 =back
 
@@ -812,7 +774,7 @@ RADIUS::XMLParser - Radius log file XML convertor
 
 =over
 
-=item This module will extract and sort any supported events included into a radius log file. 
+=item This module will extract and sort any radius events included into a radius log file. 
 
 =item Note that your logfile must contain an empty line at its end otherwise the last event will not be analyzed.
 
@@ -828,8 +790,8 @@ RADIUS::XMLParser - Radius log file XML convertor
 
 =back
 
-On first step, any event will be stored on different hash tables (with SessionID as a unique key).
-Then, for each STOP event, the respective START and INTERIM will be retrieved
+Any event will be stored on different hash (with SessionID as a unique key).
+Then, for each STOP event, the respective START and INTERIM event will be retrieved (based on same session ID)
 
 =over
 
@@ -876,40 +838,48 @@ Hash reference including below Options
 
 =item Integer (0 by default) enabling verbose mode.
 
-=item Regarding the amount of lines in a typical Radius log file (mine were 100MB large), verbose mode is split into several levels (0,1,2,3).
+=item Regarding the amount of lines in a typical Radius log file (hundred MB Large is the norm), verbose mode is split into several levels (0,1,2,3).
 
 =back
 	
-=head3 [optional] LABELS
+=head3 [optional] MAP
 
 =over
 
-=item Array reference of labels user would like to see converted into XML. 
+=item Hash reference of labels user would like to see converted into XML. 
+
+=item Hash Keys are the keys to look for on Radius side
+
+=item Hash Values are the name of the XML tags that will be written (XML keys are alias of Radius keys)
+
+=item Empty values will result on tag's name = radius keys
+
+=item Note that some Radius keys might not be XML compliant (e.g. <3GPP-XYZ-etc...>). This key / value approach will avoid such XML constraint
 
 A reference to below Array passed as an input parameter...
 
 
-	my @labels = qw(
-	  Acct-Output-Packets
-	  NAS-IP-Address
-	  Event-Timestamp
+	my %map = (
+	  "Acct-Output-Packets"	=> "Output",
+	  "NAS-IP-Address"		=> "Address",
+	  "Event-Timestamp"		=> ""
 	);
 
 
-...will result on the following XML output
+...will result on the following XML structure
 
 
 	<stop>
-		<Acct-Output-Packets></Acct-Output-Packets>
-		<NAS-IP-Address></NAS-IP-Address>
+		<Output></Output>
+		<Address></Address>
 		<Event-Timestamp></Event-Timestamp>
 	</stop>
 
-=item If LABELS is not supplied, all the found Key / Values will be written. 
+=item If MAP is not supplied, all the found Key / Values will be written. 
 
-=item Else, only the supplied labels will be written	
+=item Else, only the supplied keys / values will be written	
 
-=item  FYI, Gettings few LABELS is significantly faster... Might save precious time when dealing with large files !
+=item  FYI, Gettings few MAP is significantly faster... Might save precious time when dealing with large files !
 
 =back
 
@@ -999,7 +969,7 @@ Note that Orphan hash should not be empty after processing, and therefore should
 
 =head3 Usage:
 	
-	my $xml_file = $parser->convert($radius_file);
+	my ($xml, $stop, $start, $interim, $processed) = $parser->convert($radius_file);
 	
 =head3 Parameter:
 	
@@ -1015,7 +985,15 @@ Note that Orphan hash should not be empty after processing, and therefore should
 
 =over
 
-=item The name of the XML file that has been created.
+=item C<$xml>: The name of the XML file that has been created.
+
+=item C<$stop>: The number of STOP event written
+
+=item C<$start>: The number of START event written
+
+=item C<$interim>: The number of INTERIM event written
+
+=item C<$processed>: The number of processed lines in the original Radius log file
 
 =back
 
@@ -1043,60 +1021,16 @@ Note that Orphan hash should not be empty after processing, and therefore should
 	
 =back
 
-=head2 metadata
-
-=head3 Description:
-
-=over
-
-=item The C<metadata> will give you back some useful information about the latest XML conversion
-
-=item This hash will provide you with the number of found events, processed lines, etc... 
-
-=back
-
-=head3 Usage:
-
-=over
-
-Using below code...
-
-
-	use Data::Dumper;
-	print Dumper($parser->metadata());
-
-
-...Will result on the following output
-
-
-	$VAR1 = {
-		  'EVENT_INTERIM' 		=> 130,
-          'EVENT_START' 		=> 46,
-          'EVENT_STOP' 			=> 46,
-          'ERRORS' 				=> 0,
-          'PROCESSED_LINES' 	=> 5659
-        };
-
-=back 
-
-=head3 Return:
-
-=over
-
-=item A hash reference including metadata
-
-=back
-
 =head1 EXAMPLE:
 
 
 	use RADIUS::XMLParser;
 	
 	my $radius_file = 'radius.log';
-	my @labels = qw(
-		Event-Timestamp
-		User-Name
-		File
+	my %map = (
+	  "NAS-User-Name"		=> "User-Name",
+	  "Event-Timestamp"		=> "",
+	  "File"				=> "File"
 	);
 	
 	my $radius = RADIUS::XMLParser->new(
@@ -1107,11 +1041,11 @@ Using below code...
 			ALLEVENTS     => 1,
 			XMLENCODING   => "utf-8",
 			OUTPUTDIR     => '/tmp/',
-			LABELS        => \@labels
+			MAP	          => \%map
 		}
 	);
 	
-	my $xml_file = $radius->convert($radius_file);
+	my ($xml, $stop, $start, $interim, $processed) = $radius->convert($radius_file);
 	
 
 Here is how the generated XML file will look like

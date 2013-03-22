@@ -23,4 +23,4 @@ requires:
   IO::File: 0
   Storable: 0
   XML::Writer: 0
-version: 2.2
+version: 2.3
