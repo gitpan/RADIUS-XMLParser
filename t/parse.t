@@ -10,7 +10,6 @@ my %labels;
 my %expect;
 my %actual;
 my $parser;
-my $xml;
 
 # Declare labels to write in test XML
 %labels = ( "File" => "File" );
@@ -38,19 +37,19 @@ my ( $xml, $stop, $start, $interim, $processed ) = $parser->convert($test_file);
 
 # Test that XML has been created
 dir_contains_ok( $test_output_dir, ['radius.xml'],
-	"Assert that radius.xml has been created" );
+	"Assert that xml file has been created" );
 if ( -e "$test_output_dir/radius.xml" ) {
 	unlink "$test_output_dir/radius.xml";
 }
 
 ok( $stop == $expect{STOP},       
-	"Assert that stop event found are correct" );
+	"Assert that stop event(s) found are correct" );
 ok( $start == $expect{START},     
-	"Assert that stop event found are correct" );
+	"Assert that stop event(s) found are correct" );
 ok( $interim == $expect{INTERIM}, 
-	"Assert that stop event found are correct" );
+	"Assert that stop event(s) found are correct" );
 ok( $processed == $expect{LINES},
-	"Assert that processed lines are correct" );
+	"Assert that processed line(s) are correct" );
 
 # End test (declare test run)
 done_testing( scalar( keys %expect ) + 1 );

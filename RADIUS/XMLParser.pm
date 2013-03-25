@@ -10,7 +10,7 @@ use Carp;
 use IO::File;
 use XML::Writer;
 
-our $VERSION = '2.3';
+our $VERSION = '2.30';
 
 my $interimUpdate;
 my $writer;
@@ -18,9 +18,7 @@ my $labelref;
 my $mapRef;
 my $startDbm;
 my $interimDbm;
-my $fname          = 'RADIUS::XMLParser';
 my $daysForOrphan  = 1;
-my $verbose        = 0;
 my $purgeOrphan    = 0;
 my $writeAllEvents = 0;
 my $outputDir;
@@ -29,7 +27,7 @@ my $xmlencoding = "utf-8";
 
 my %map;
 my @labels;
-my %tags     = ();
+my %tags = ();
 my %event;
 my %start;
 my %stop;
@@ -46,7 +44,6 @@ sub new {
 	my %params = %$ref;
 
 	#Load parameters if any
-	$verbose        = $params{VERBOSE}       if $params{VERBOSE};
 	$mapRef         = $params{MAP}           if $params{MAP};
 	$purgeOrphan    = $params{AUTOPURGE}     if $params{AUTOPURGE};
 	$daysForOrphan  = $params{DAYSFORORPHAN} if $params{DAYSFORORPHAN};
@@ -81,7 +78,6 @@ sub new {
 # (especially for deamons process)
 #--------------------------------------------------
 sub flush($) {
-
 	my ($self) = @_;
 	_loadHash();
 }
@@ -104,7 +100,6 @@ sub convert($$) {
 	$log = File::Spec->rel2abs($log);
 
 	open( LOG, $log ) or croak "Cannot open file; File=$log; $!";
-	print "$fname : Will now parse file $log\n" if $verbose;
 
 	#Boolean that becomes true (1) when the first blank lines have been skipped.
 	my $begining_skipped = 0;
@@ -117,8 +112,7 @@ sub convert($$) {
 		# Skip the begining of the log file if it only contains blank lines.
 		if ( /^(\s)*$/ && !$begining_skipped ) {
 			next;
-		}
-		else {
+		} else {
 			$begining_skipped = 1;
 		}
 
@@ -136,7 +130,7 @@ sub convert($$) {
 	#Reinitializing Stop hash table but keep Start and Interim as orphans
 	%stop = ();
 
-	return ($xmlReturn{XML_FILE}, $xmlReturn{XML_STOP}, $xmlReturn{XML_START}, $xmlReturn{XML_INTERIM}, $processedLines);
+	return ( $xmlReturn{XML_FILE}, $xmlReturn{XML_STOP}, $xmlReturn{XML_START}, $xmlReturn{XML_INTERIM}, $processedLines );
 
 }
 
@@ -161,7 +155,6 @@ sub _event2xml($) {
 
 	#Create path
 	$xml = File::Spec->catfile( $outputDir, $xml );
-	print "$fname : Will now convert $log into $xml\n" if $verbose;
 
 	#Create a new IO::File
 	my $output = IO::File->new(">$xml")
@@ -173,8 +166,7 @@ sub _event2xml($) {
 		ENCODING    => $xmlencoding,
 		DATA_MODE   => 1,
 		DATA_INDENT => 1
-	  )
-	  or croak "cannot create XML::Writer: $!";
+	) or croak "cannot create XML::Writer: $!";
 
 	#Start writing
 	$writer->xmlDecl( uc($xmlencoding) );
@@ -194,7 +186,7 @@ sub _event2xml($) {
 		#Open START tag
 		my %startevent = ();
 
-#And try to retrieve the respective Start session in orphan hash (based on unique session Id)
+		#And try to retrieve the respective Start session in orphan hash (based on unique session Id)
 		my $starteventref = _findInStartQueue($sessionId);
 		$writer->startTag("start");
 		if ($starteventref) {
@@ -210,7 +202,7 @@ sub _event2xml($) {
 		#Open INTERIMS tag
 		my %interimevents = ();
 
-#And try to retrieve all the respective Interim sessions in orphan hash (based on unique session Id)
+		#And try to retrieve all the respective Interim sessions in orphan hash (based on unique session Id)
 		my $interimeventsref = _findInInterimQueue($sessionId);
 		$writer->startTag("interims");
 		if ($interimeventsref) {
@@ -266,7 +258,7 @@ sub _event2xml($) {
 			#Open INTERIMS tag
 			my %interimevents = ();
 
-#And try to retrieve all the respective Interim sessions in orphan hash (based on unique session Id)
+			#And try to retrieve all the respective Interim sessions in orphan hash (based on unique session Id)
 			my $interimeventsref = _findInInterimQueue($sessionId);
 			$writer->startTag("interims");
 			if ($interimeventsref) {
@@ -291,7 +283,7 @@ sub _event2xml($) {
 			#Open STOP tag
 			$writer->startTag("stop");
 
-		#Do not write content as all the stop events have been already processed
+			#Do not write content as all the stop events have been already processed
 
 			#Close STOP tab
 			$writer->endTag("stop");
@@ -315,8 +307,8 @@ sub _event2xml($) {
 			#Open START tag
 			$writer->startTag("start");
 
-	   #Do not write content as all the start events have been already processed
-	   #Close START tag
+			#Do not write content as all the start events have been already processed
+			#Close START tag
 			$writer->endTag("start");
 
 			for my $event ( sort keys %interimevents ) {
@@ -335,8 +327,8 @@ sub _event2xml($) {
 			#Open STOP tag
 			$writer->startTag("stop");
 
-		#Do not write content as all the stop events have been already processed
-		#Close STOP tab
+			#Do not write content as all the stop events have been already processed
+			#Close STOP tab
 			$writer->endTag("stop");
 
 			#Close SESSION tag
@@ -399,9 +391,6 @@ sub _purgeStartOrphans($) {
 			next;
 		}
 	}
-	print
-"$fname : Removed $removed start orphans from orphanage (older than $daysForOrphan day)\n"
-	  if $verbose;
 
 	#Return reference of purged hash
 	return \%hash;
@@ -438,8 +427,7 @@ sub _purgeInterimOrphans($) {
 			}
 
 			#Compute max allowed delta time
-			my $mtime =
-			  ( $newHash{"Event-Timestamp"} ) ? $newHash{"Event-Timestamp"} : 0;
+			my $mtime = ( $newHash{"Event-Timestamp"} ) ? $newHash{"Event-Timestamp"} : 0;
 			my $delta = $time - $mtime;
 			if ( $delta > $threshold ) {
 
@@ -453,10 +441,6 @@ sub _purgeInterimOrphans($) {
 		#Remove whole interims events if it does not get any interim session
 		delete $hash{$sessionId} if ( !scalar( keys %newHash ) );
 	}
-
-	print
-"$fname : Removed $removed interim orphans from orphanage (older than $daysForOrphan day)\n"
-	  if $verbose;
 
 	#Return reference of purged hash
 	return \%hash;
@@ -474,12 +458,6 @@ sub _findInStartQueue($) {
 		#found Start event
 		#Remove start event from orphan hash
 		delete $start{$sessionId};
-	}
-	else {
-
-		#not found
-		print "$fname : $sessionId - Orphan stop without start\n"
-		  if $verbose > 2;
 	}
 
 	#Return hash reference of found Start event, undef otherwise
@@ -500,12 +478,6 @@ sub _findInInterimQueue($) {
 		#found Start event
 		#Remove interim event from orphan hash
 		delete $interim{$sessionId};
-	}
-	else {
-
-		#not found
-		print "$fname : $sessionId - Orphan stop without interim\n"
-		  if $verbose > 2;
 	}
 
 	#Return hash reference of found Start event, undef otherwise
@@ -539,8 +511,7 @@ sub _writeEvent($) {
 		my $tag;
 		if ( $map{$key} ) {
 			$tag = $map{$key};
-		}
-		else {
+		} else {
 			$tag = $key;
 		}
 
@@ -561,9 +532,6 @@ sub _writeEvent($) {
 sub _loadHash() {
 
 	#Load previously stored hashes
-	print "$fname : Loading Start and Interim orphans from orphanage\n"
-	  if $verbose;
-
 	my $startref;
 	my $interimref;
 
@@ -573,15 +541,7 @@ sub _loadHash() {
 		  or croak "cannot open file $startDbm: $!";
 		$startref = _purgeStartOrphans($startref) if $purgeOrphan;
 		%start = %$startref;
-		print "$fname : Start orphanage is "
-		  . scalar( keys %start )
-		  . " orphans long\n"
-		  if $verbose;
-	}
-	else {
-		print
-		  "$fname : Start orphanage does not exist. Initializing a new one\n"
-		  if $verbose;
+	} else {
 
 		#Does not exist, so initialize a new one
 		%start = ();
@@ -593,15 +553,7 @@ sub _loadHash() {
 		  or croak "cannot open file $interimDbm: $!";
 		$interimref = _purgeInterimOrphans($interimref) if $purgeOrphan;
 		%interim = %$interimref;
-		print "$fname : Interim orphanage is "
-		  . scalar( keys %interim )
-		  . " orphans long\n"
-		  if $verbose;
-	}
-	else {
-		print
-		  "$fname : Interim orphanage does not exist. Initializing a new one\n"
-		  if $verbose;
+	} else {
 
 		#Does not exist, so initialize a new one
 		%interim = ();
@@ -646,8 +598,7 @@ sub _analyseRadiusLine($$$) {
 
 		%event = ();
 
-	}
-	elsif ( $line =~ m/^\n/ || $line =~ m/^[\t\s]+[\n]?$/ ) {
+	} elsif ( $line =~ m/^\n/ || $line =~ m/^[\t\s]+[\n]?$/ ) {
 
 		#Empty line (end of session - Last line)
 
@@ -666,8 +617,7 @@ sub _analyseRadiusLine($$$) {
 
 			$start{$sessionId}{File} = $file;
 
-		}
-		elsif ( $val =~ /.*[S,s]top.*/ ) {
+		} elsif ( $val =~ /.*[S,s]top.*/ ) {
 
 			#STOP event
 			foreach my $key ( keys %event ) {
@@ -678,8 +628,7 @@ sub _analyseRadiusLine($$$) {
 
 			$stop{$sessionId}{File} = $file;
 
-		}
-		elsif ( $val =~ /.*[I,i]nterim/ ) {
+		} elsif ( $val =~ /.*[I,i]nterim/ ) {
 
 			#INTERIM event
 			$interimUpdate = _largestKeyFromHash( $interim{$sessionId} );
@@ -692,21 +641,14 @@ sub _analyseRadiusLine($$$) {
 
 			$interim{$sessionId}{$interimUpdate}{File} = $file;
 
-		}
-		else {
+		} else {
+
 			#If EVENT is populated, this is a unmanaged EVENT or an unexpected empty line
 			#Ignore it
 			return;
 		}
 
-	}
-	elsif (
-		my ( $tag, $val ) = (
-			$line =~
-			  m/^\t([0-9A-Za-z:-]+)\s+=\s+["]?([A-Za-z0-9=\\\.-\_\s]*)["]?.*\n/
-		)
-	  )
-	{
+	} elsif ( my ( $tag, $val ) = ( $line =~ m/^\t([0-9A-Za-z:-]+)\s+=\s+["]?([A-Za-z0-9=\\\.-\_\s]*)["]?.*\n/ ) ) {
 
 		#Between first and last line, we store any TAG/VALUE found
 
@@ -750,19 +692,19 @@ RADIUS::XMLParser - Radius log file XML convertor
 
 	
 	my %labels = (
-		'Event-Timestamp'	=> 'Time',	# name of tag "Event-Timestamp"
-		'User-Name'			=> 'User',	# name of tag "User-Name"
-		'File'				=> ''		# default name (i.e. File) for tag File
+		'Event-Timestamp' => 'Time', # name of tag "Event-Timestamp"
+		'User-Name' => 'User', # name of tag "User-Name"
+		'File' => '' # default name (i.e. File) for tag File
 	);
 	
 	my $radius = RADIUS::XMLParser->new(
 		{
-			VERBOSE       => 1,
+			VERBOSE => 1,
 			DAYSFORORPHAN => 1,
-			AUTOPURGE     => 0,
-			ALLEVENTS     => 1,
-			OUTPUTDIR     => '/tmp/',
-			MAP           => \%labels
+			AUTOPURGE => 0,
+			ALLEVENTS => 1,
+			OUTPUTDIR => '/tmp/',
+			MAP => \%labels
 		}
 	);
 	
@@ -838,7 +780,7 @@ Hash reference including below Options
 
 =item Integer (0 by default) enabling verbose mode.
 
-=item Regarding the amount of lines in a typical Radius log file (hundred MB Large is the norm), verbose mode is split into several levels (0,1,2,3).
+=item Regarding the amount of lines in a typical Radius log file (hundred MB large is the norm), verbose mode is split into several levels (0,1,2,3).
 
 =back
 	
@@ -861,8 +803,8 @@ A reference to below Array passed as an input parameter...
 
 	my %map = (
 	  "Acct-Output-Packets"	=> "Output",
-	  "NAS-IP-Address"		=> "Address",
-	  "Event-Timestamp"		=> ""
+	  "NAS-IP-Address" => "Address",
+	  "Event-Timestamp" => ""
 	);
 
 
@@ -975,9 +917,7 @@ Note that Orphan hash should not be empty after processing, and therefore should
 	
 =over
 
-=item C<$radius_file>:
-
-=item Radius log file that will be parsed. 
+=item C<$radius_file>: Radius log file that will be parsed. 
 	
 =back
 
@@ -1028,9 +968,9 @@ Note that Orphan hash should not be empty after processing, and therefore should
 	
 	my $radius_file = 'radius.log';
 	my %map = (
-	  "NAS-User-Name"		=> "User-Name",
-	  "Event-Timestamp"		=> "",
-	  "File"				=> "File"
+	  "NAS-User-Name" => "User-Name",
+	  "Event-Timestamp"	=> "",
+	  "File" => "File"
 	);
 	
 	my $radius = RADIUS::XMLParser->new(
